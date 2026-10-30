@@ -691,18 +691,27 @@ struct CBrowseFolderParams
   LPCTSTR NewFolderName;
   CSysString SelectedPath;
   WNDPROC OldProc;
+  WNDPROC ButtonProc;
+  HWND Dialog;
+  HWND NewFolderButton;
   UINT NewFolderButtonId;
+  bool Handling;
 
   CBrowseFolderParams():
       InitialPath(NULL),
       NewFolderName(NULL),
       OldProc(NULL),
-      NewFolderButtonId(0)
+      ButtonProc(NULL),
+      Dialog(NULL),
+      NewFolderButton(NULL),
+      NewFolderButtonId(0),
+      Handling(false)
       {}
 };
 
 struct CNewFolderButton
 {
+  HWND Window;
   UINT Id;
 };
 
@@ -717,11 +726,15 @@ static BOOL CALLBACK FindNewFolderButtonProc(HWND child, LPARAM param)
   const int id = ::GetDlgCtrlID(child);
   if (id == (int)kMakeNewFolderId)
   {
+    button->Window = child;
     button->Id = kMakeNewFolderId;
     return FALSE;
   }
-  if (id > 0 && id != IDOK && id != IDCANCEL && button->Id == 0)
+  if (id > 0 && id != IDOK && id != IDCANCEL && !button->Window)
+  {
+    button->Window = child;
     button->Id = (UINT)id;
+  }
   return TRUE;
 }
 
@@ -808,6 +821,28 @@ static bool CreateNamedNewFolder(HWND hwnd, CBrowseFolderParams *params)
   return false;
 }
 
+static LRESULT CALLBACK BrowseNewFolderButtonProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  CBrowseFolderParams *params =
+      (CBrowseFolderParams *)::GetProp(hwnd, kBrowseNewFolderProp);
+  if (msg == WM_NCDESTROY)
+    ::RemoveProp(hwnd, kBrowseNewFolderProp);
+  /* Mouse, keyboard and the Alt mnemonic all end up as BM_CLICK on the button.
+     Eating it here stops the shell from also creating "New Folder". */
+  if (params && msg == BM_CLICK && !params->Handling)
+  {
+    params->Handling = true;
+    HWND dlg = params->Dialog ? params->Dialog : ::GetParent(hwnd);
+    const bool created = CreateNamedNewFolder(dlg, params);
+    params->Handling = false;
+    if (created)
+      return 0;
+  }
+  if (params && params->ButtonProc)
+    return ::CallWindowProc(params->ButtonProc, hwnd, msg, wParam, lParam);
+  return ::DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 static LRESULT CALLBACK BrowseNewFolderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   CBrowseFolderParams *params =
@@ -818,14 +853,46 @@ static LRESULT CALLBACK BrowseNewFolderWndProc(HWND hwnd, UINT msg, WPARAM wPara
       && msg == WM_COMMAND
       && params->NewFolderButtonId != 0
       && LOWORD(wParam) == params->NewFolderButtonId
-      && HIWORD(wParam) == BN_CLICKED)
+      && HIWORD(wParam) == BN_CLICKED
+      && !params->Handling)
   {
-    if (CreateNamedNewFolder(hwnd, params))
+    params->Handling = true;
+    const bool created = CreateNamedNewFolder(hwnd, params);
+    params->Handling = false;
+    if (created)
       return 0;
   }
   if (params && params->OldProc)
     return ::CallWindowProc(params->OldProc, hwnd, msg, wParam, lParam);
   return ::DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+static void InstallNewFolderHook(HWND hwnd, CBrowseFolderParams *params)
+{
+  params->Dialog = hwnd;
+  CNewFolderButton found;
+  found.Window = ::GetDlgItem(hwnd, (int)kMakeNewFolderId);
+  found.Id = found.Window ? kMakeNewFolderId : 0;
+  if (!found.Window)
+    ::EnumChildWindows(hwnd, FindNewFolderButtonProc, (LPARAM)&found);
+
+  if (found.Window)
+  {
+    params->NewFolderButton = found.Window;
+    params->NewFolderButtonId = found.Id ? found.Id : (UINT)::GetDlgCtrlID(found.Window);
+    params->ButtonProc = (WNDPROC)::SetWindowLongPtr(found.Window, GWLP_WNDPROC,
+        (LONG_PTR)BrowseNewFolderButtonProc);
+    if (params->ButtonProc)
+      ::SetProp(found.Window, kBrowseNewFolderProp, params);
+  }
+  else
+    params->NewFolderButtonId = kMakeNewFolderId;
+
+  /* Alt+M is delivered as WM_COMMAND to the dialog, not as BM_CLICK. */
+  params->OldProc = (WNDPROC)::SetWindowLongPtr(hwnd, GWLP_WNDPROC,
+      (LONG_PTR)BrowseNewFolderWndProc);
+  if (params->OldProc)
+    ::SetProp(hwnd, kBrowseNewFolderProp, params);
 }
 
 static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lp, LPARAM data)
@@ -840,21 +907,7 @@ static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lp, LPARAM d
       dmlib::setDarkWndSafeEx(hwnd, false);
 #endif
       if (params && params->NewFolderName && params->NewFolderName[0])
-      {
-        CNewFolderButton found;
-        found.Id = 0;
-        if (::GetDlgItem(hwnd, (int)kMakeNewFolderId))
-          found.Id = kMakeNewFolderId;
-        else
-          ::EnumChildWindows(hwnd, FindNewFolderButtonProc, (LPARAM)&found);
-        if (found.Id == 0)
-          found.Id = kMakeNewFolderId;
-        params->NewFolderButtonId = found.Id;
-        params->OldProc = (WNDPROC)::SetWindowLongPtr(hwnd, GWLP_WNDPROC,
-            (LONG_PTR)BrowseNewFolderWndProc);
-        if (params->OldProc)
-          ::SetProp(hwnd, kBrowseNewFolderProp, params);
-      }
+        InstallNewFolderHook(hwnd, params);
       if (params && params->InitialPath)
         SendMessage(hwnd, BFFM_SETSELECTION, TRUE, (LPARAM)params->InitialPath);
       break;

@@ -89,7 +89,8 @@ void CCopyDialog::OnButtonSetPath()
   const UString title = LangString(IDS_SET_FOLDER);
 
   UString resultPath;
-  if (!MyBrowseForFolder(*this, title, currentPath, resultPath))
+  if (!MyBrowseForFolder(*this, title, currentPath, resultPath,
+      NewFolderName.IsEmpty() ? NULL : NewFolderName.Ptr()))
     return;
   NFile::NName::NormalizeDirPathPrefix(resultPath);
   _path.SetCurSel(-1);

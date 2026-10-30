@@ -685,6 +685,25 @@ void CApp::OnCopy(bool move, bool copyToSame, unsigned srcPanelIndex)
     LangString(move ? IDS_MOVE : IDS_COPY, copyDialog.Title);
     LangString(move ? IDS_MOVE_TO : IDS_COPY_TO, copyDialog.Static);
     copyDialog.Info = srcPanel.GetItemsInfoString(indices);
+    /* Extract inside an opened archive is this same Copy dialog
+       (CPanel::ExtractArchives calls OnCopy when _parentFolders is not empty).
+       The browse dialog's "New Folder" button should use the archive name. */
+    if (!srcPanel._parentFolders.IsEmpty())
+    {
+      const CFolderLink &link = srcPanel._parentFolders[0];
+      UString arcPath;
+      if (!link.FilePath.IsEmpty())
+        arcPath = fs2us(link.FilePath);
+      else
+        arcPath = link.VirtualPath;
+      const int slash = arcPath.ReverseFind_PathSepar();
+      if (slash >= 0)
+        arcPath.DeleteFrontal((unsigned)slash + 1);
+      const int dot = arcPath.ReverseFind_Dot();
+      if (dot > 0)
+        arcPath.DeleteFrom((unsigned)dot);
+      copyDialog.NewFolderName = arcPath;
+    }
 
     if (copyDialog.Create(srcPanel.GetParent()) != IDOK)
       return;

@@ -23,6 +23,9 @@ public:
   UString Static;
   UString Value;
   UString Info;
+  /* Suggested name for the browse dialog's "New Folder" button.
+     Empty keeps the system name ("New Folder"). */
+  UString NewFolderName;
   UStringVector Strings;
 
   INT_PTR Create(HWND parentWindow = NULL) { return CModalDialog::Create(IDD_COPY, parentWindow); }
