@@ -644,7 +644,8 @@ bool BrowseForFolder(HWND, LPCTSTR, UINT, LPCTSTR, CSysString &)
 }
 
 bool BrowseForFolder(HWND /* owner */, LPCTSTR /* title */,
-    LPCTSTR /* initialFolder */, CSysString & /* resultPath */)
+    LPCTSTR /* initialFolder */, CSysString & /* resultPath */,
+    LPCTSTR /* newFolderName */)
 {
   /*
   // SHBrowseForFolder doesn't work before CE 6.0 ?
@@ -680,8 +681,156 @@ bool BrowseForFolder(LPBROWSEINFO browseInfo, CSysString &resultPath)
 }
 
 
-static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM /* lp */, LPARAM data)
+/* dlg template id of the "Make New Folder" button in SHBrowseForFolder. */
+static const UINT kMakeNewFolderId = 0x3746;
+static LPCTSTR const kBrowseNewFolderProp = TEXT("7-Zip.BrowseNewFolder");
+
+struct CBrowseFolderParams
 {
+  LPCTSTR InitialPath;
+  LPCTSTR NewFolderName;
+  CSysString SelectedPath;
+  WNDPROC OldProc;
+  UINT NewFolderButtonId;
+
+  CBrowseFolderParams():
+      InitialPath(NULL),
+      NewFolderName(NULL),
+      OldProc(NULL),
+      NewFolderButtonId(0)
+      {}
+};
+
+struct CNewFolderButton
+{
+  UINT Id;
+};
+
+static BOOL CALLBACK FindNewFolderButtonProc(HWND child, LPARAM param)
+{
+  CNewFolderButton *button = (CNewFolderButton *)param;
+  TCHAR cls[32];
+  if (!::GetClassName(child, cls, 32))
+    return TRUE;
+  if (lstrcmpi(cls, TEXT("Button")) != 0)
+    return TRUE;
+  const int id = ::GetDlgCtrlID(child);
+  if (id == (int)kMakeNewFolderId)
+  {
+    button->Id = kMakeNewFolderId;
+    return FALSE;
+  }
+  if (id > 0 && id != IDOK && id != IDCANCEL && button->Id == 0)
+    button->Id = (UINT)id;
+  return TRUE;
+}
+
+static void SanitizeNewFolderName(LPCTSTR src, CSysString &name)
+{
+  name.Empty();
+  if (!src)
+    return;
+  for (const TCHAR *p = src; *p; p++)
+  {
+    const TCHAR c = *p;
+    if (c < 32)
+      continue;
+    switch (c)
+    {
+      case '\\': case '/': case ':': case '*': case '?':
+      case '"': case '<': case '>': case '|':
+        continue;
+      default:
+        name += c;
+        break;
+    }
+  }
+  while (!name.IsEmpty())
+  {
+    const TCHAR c = name[name.Len() - 1];
+    if (c != ' ' && c != '.')
+      break;
+    name.DeleteBack();
+  }
+}
+
+static void JoinDirAndName(const CSysString &parent, const CSysString &name, CSysString &path)
+{
+  path = parent;
+  if (!path.IsEmpty())
+  {
+    const TCHAR c = path[path.Len() - 1];
+    if (c != CHAR_PATH_SEPARATOR && c != '/')
+      path.Add_PathSepar();
+  }
+  path += name;
+}
+
+/* Creates <selected>\\<archive name>, or "name (2)", "name (3)", ...
+   Returns true when the click was handled. */
+static bool CreateNamedNewFolder(HWND hwnd, CBrowseFolderParams *params)
+{
+  CSysString base;
+  SanitizeNewFolderName(params->NewFolderName, base);
+  if (base.IsEmpty())
+    return false;
+
+  CSysString parent = params->SelectedPath;
+  if (parent.IsEmpty() && params->InitialPath)
+    parent = params->InitialPath;
+  if (parent.IsEmpty())
+    return false;
+
+  for (unsigned i = 1; i < 100; i++)
+  {
+    CSysString leaf = base;
+    if (i > 1)
+    {
+      leaf += TEXT(" (");
+      leaf.Add_UInt32(i);
+      leaf += TEXT(")");
+    }
+    CSysString full;
+    JoinDirAndName(parent, leaf, full);
+    if (::GetFileAttributes(full) != INVALID_FILE_ATTRIBUTES)
+      continue;
+    if (!::CreateDirectory(full, NULL))
+    {
+      if (::GetLastError() != ERROR_ALREADY_EXISTS)
+        return false;
+      continue;
+    }
+    params->SelectedPath = full;
+    ::SHChangeNotify(SHCNE_MKDIR, SHCNF_PATH | SHCNF_FLUSHNOWAIT, (LPCTSTR)full, NULL);
+    ::SendMessage(hwnd, BFFM_SETSELECTION, TRUE, (LPARAM)(LPCTSTR)full);
+    return true;
+  }
+  return false;
+}
+
+static LRESULT CALLBACK BrowseNewFolderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  CBrowseFolderParams *params =
+      (CBrowseFolderParams *)::GetProp(hwnd, kBrowseNewFolderProp);
+  if (msg == WM_NCDESTROY)
+    ::RemoveProp(hwnd, kBrowseNewFolderProp);
+  if (params
+      && msg == WM_COMMAND
+      && params->NewFolderButtonId != 0
+      && LOWORD(wParam) == params->NewFolderButtonId
+      && HIWORD(wParam) == BN_CLICKED)
+  {
+    if (CreateNamedNewFolder(hwnd, params))
+      return 0;
+  }
+  if (params && params->OldProc)
+    return ::CallWindowProc(params->OldProc, hwnd, msg, wParam, lParam);
+  return ::DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lp, LPARAM data)
+{
+  CBrowseFolderParams *params = (CBrowseFolderParams *)data;
   #ifndef UNDER_CE
   switch (uMsg)
   {
@@ -690,20 +839,33 @@ static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM /* lp */, LP
 #ifdef ZIP7_DARKMODE
       dmlib::setDarkWndSafeEx(hwnd, false);
 #endif
-      SendMessage(hwnd, BFFM_SETSELECTION, TRUE, data);
+      if (params && params->NewFolderName && params->NewFolderName[0])
+      {
+        CNewFolderButton found;
+        found.Id = 0;
+        if (::GetDlgItem(hwnd, (int)kMakeNewFolderId))
+          found.Id = kMakeNewFolderId;
+        else
+          ::EnumChildWindows(hwnd, FindNewFolderButtonProc, (LPARAM)&found);
+        if (found.Id == 0)
+          found.Id = kMakeNewFolderId;
+        params->NewFolderButtonId = found.Id;
+        params->OldProc = (WNDPROC)::SetWindowLongPtr(hwnd, GWLP_WNDPROC,
+            (LONG_PTR)BrowseNewFolderWndProc);
+        if (params->OldProc)
+          ::SetProp(hwnd, kBrowseNewFolderProp, params);
+      }
+      if (params && params->InitialPath)
+        SendMessage(hwnd, BFFM_SETSELECTION, TRUE, (LPARAM)params->InitialPath);
       break;
     }
-    /*
     case BFFM_SELCHANGED:
     {
-      TCHAR dir[MAX_PATH];
-      if (::SHGetPathFromIDList((LPITEMIDLIST) lp , dir))
-        SendMessage(hwnd, BFFM_SETSTATUSTEXT, 0, (LPARAM)dir);
-      else
-        SendMessage(hwnd, BFFM_SETSTATUSTEXT, 0, (LPARAM)TEXT(""));
+      CSysString path;
+      if (params && GetPathFromIDList((LPCITEMIDLIST)lp, path))
+        params->SelectedPath = path;
       break;
     }
-    */
     default:
       break;
   }
@@ -713,10 +875,13 @@ static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM /* lp */, LP
 
 
 static bool BrowseForFolder(HWND owner, LPCTSTR title, UINT ulFlags,
-    LPCTSTR initialFolder, CSysString &resultPath)
+    LPCTSTR initialFolder, CSysString &resultPath, LPCTSTR newFolderName)
 {
   CSysString displayName;
   BROWSEINFO browseInfo;
+  CBrowseFolderParams params;
+  params.InitialPath = initialFolder;
+  params.NewFolderName = newFolderName;
   browseInfo.hwndOwner = owner;
   browseInfo.pidlRoot = NULL;
 
@@ -731,8 +896,9 @@ static bool BrowseForFolder(HWND owner, LPCTSTR title, UINT ulFlags,
   browseInfo.lpszTitle = title;
   // #endif
   browseInfo.ulFlags = ulFlags;
-  browseInfo.lpfn = initialFolder ? BrowseCallbackProc : NULL;
-  browseInfo.lParam = (LPARAM)initialFolder;
+  browseInfo.lpfn = (initialFolder || (newFolderName && newFolderName[0])) ?
+      BrowseCallbackProc : NULL;
+  browseInfo.lParam = (LPARAM)&params;
   return BrowseForFolder(&browseInfo, resultPath);
 }
 
@@ -744,13 +910,13 @@ static bool BrowseForFolder(HWND owner, LPCTSTR title, UINT ulFlags,
 #endif
 
 bool BrowseForFolder(HWND owner, LPCTSTR title,
-    LPCTSTR initialFolder, CSysString &resultPath)
+    LPCTSTR initialFolder, CSysString &resultPath, LPCTSTR newFolderName)
 {
   return BrowseForFolder(owner, title,
       #ifndef UNDER_CE
       BIF_NEWDIALOGSTYLE |
       #endif
-      BIF_RETURNONLYFSDIRS | BIF_STATUSTEXT, initialFolder, resultPath);
+      BIF_RETURNONLYFSDIRS | BIF_STATUSTEXT, initialFolder, resultPath, newFolderName);
   // BIF_STATUSTEXT; BIF_USENEWUI   (Version 5.0)
 }
 
@@ -778,28 +944,171 @@ static bool BrowseForFolder(LPBROWSEINFOW browseInfo, UString &resultPath)
   return GetPathFromIDList(itemIDList, resultPath);
 }
 
-static
-int CALLBACK BrowseCallbackProc2(HWND hwnd, UINT uMsg, LPARAM /* lp */, LPARAM data)
+struct CBrowseFolderParamsW
 {
+  LPCWSTR InitialPath;
+  LPCWSTR NewFolderName;
+  UString SelectedPath;
+  WNDPROC OldProc;
+  UINT NewFolderButtonId;
+
+  CBrowseFolderParamsW():
+      InitialPath(NULL),
+      NewFolderName(NULL),
+      OldProc(NULL),
+      NewFolderButtonId(0)
+      {}
+};
+
+static BOOL CALLBACK FindNewFolderButtonProcW(HWND child, LPARAM param)
+{
+  CNewFolderButton *button = (CNewFolderButton *)param;
+  wchar_t cls[32];
+  if (!::GetClassNameW(child, cls, 32))
+    return TRUE;
+  if (lstrcmpiW(cls, L"Button") != 0)
+    return TRUE;
+  const int id = ::GetDlgCtrlID(child);
+  if (id == (int)kMakeNewFolderId)
+  {
+    button->Id = kMakeNewFolderId;
+    return FALSE;
+  }
+  if (id > 0 && id != IDOK && id != IDCANCEL && button->Id == 0)
+    button->Id = (UINT)id;
+  return TRUE;
+}
+
+static void SanitizeNewFolderNameW(LPCWSTR src, UString &name)
+{
+  name.Empty();
+  if (!src)
+    return;
+  for (const wchar_t *p = src; *p; p++)
+  {
+    const wchar_t c = *p;
+    if (c < 32)
+      continue;
+    switch (c)
+    {
+      case L'\\': case L'/': case L':': case L'*': case L'?':
+      case L'"': case L'<': case L'>': case L'|':
+        continue;
+      default:
+        name += c;
+        break;
+    }
+  }
+  while (!name.IsEmpty())
+  {
+    const wchar_t c = name[name.Len() - 1];
+    if (c != L' ' && c != L'.')
+      break;
+    name.DeleteBack();
+  }
+}
+
+static bool CreateNamedNewFolderW(HWND hwnd, CBrowseFolderParamsW *params)
+{
+  UString base;
+  SanitizeNewFolderNameW(params->NewFolderName, base);
+  if (base.IsEmpty())
+    return false;
+
+  UString parent = params->SelectedPath;
+  if (parent.IsEmpty() && params->InitialPath)
+    parent = params->InitialPath;
+  if (parent.IsEmpty())
+    return false;
+
+  for (unsigned i = 1; i < 100; i++)
+  {
+    UString leaf = base;
+    if (i > 1)
+    {
+      leaf += L" (";
+      leaf.Add_UInt32(i);
+      leaf += L")";
+    }
+    UString full = parent;
+    if (!full.IsEmpty())
+    {
+      const wchar_t c = full[full.Len() - 1];
+      if (c != L'\\' && c != L'/')
+        full.Add_PathSepar();
+    }
+    full += leaf;
+    if (::GetFileAttributesW(full) != INVALID_FILE_ATTRIBUTES)
+      continue;
+    if (!::CreateDirectoryW(full, NULL))
+    {
+      if (::GetLastError() != ERROR_ALREADY_EXISTS)
+        return false;
+      continue;
+    }
+    params->SelectedPath = full;
+    ::SHChangeNotify(SHCNE_MKDIR, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, (LPCWSTR)full, NULL);
+    ::SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, (LPARAM)(LPCWSTR)full);
+    return true;
+  }
+  return false;
+}
+
+static LRESULT CALLBACK BrowseNewFolderWndProcW(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  CBrowseFolderParamsW *params =
+      (CBrowseFolderParamsW *)::GetPropW(hwnd, L"7-Zip.BrowseNewFolder");
+  if (msg == WM_NCDESTROY)
+    ::RemovePropW(hwnd, L"7-Zip.BrowseNewFolder");
+  if (params
+      && msg == WM_COMMAND
+      && params->NewFolderButtonId != 0
+      && LOWORD(wParam) == params->NewFolderButtonId
+      && HIWORD(wParam) == BN_CLICKED)
+  {
+    if (CreateNamedNewFolderW(hwnd, params))
+      return 0;
+  }
+  if (params && params->OldProc)
+    return ::CallWindowProcW(params->OldProc, hwnd, msg, wParam, lParam);
+  return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static
+int CALLBACK BrowseCallbackProc2(HWND hwnd, UINT uMsg, LPARAM lp, LPARAM data)
+{
+  CBrowseFolderParamsW *params = (CBrowseFolderParamsW *)data;
   switch (uMsg)
   {
     case BFFM_INITIALIZED:
     {
-      SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
+      if (params && params->NewFolderName && params->NewFolderName[0])
+      {
+        CNewFolderButton found;
+        found.Id = 0;
+        if (::GetDlgItem(hwnd, (int)kMakeNewFolderId))
+          found.Id = kMakeNewFolderId;
+        else
+          ::EnumChildWindows(hwnd, FindNewFolderButtonProcW, (LPARAM)&found);
+        if (found.Id == 0)
+          found.Id = kMakeNewFolderId;
+        params->NewFolderButtonId = found.Id;
+        params->OldProc = (WNDPROC)::SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
+            (LONG_PTR)BrowseNewFolderWndProcW);
+        if (params->OldProc)
+          ::SetPropW(hwnd, L"7-Zip.BrowseNewFolder", params);
+      }
+      if (params && params->InitialPath)
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, (LPARAM)params->InitialPath);
       break;
     }
-    /*
     case BFFM_SELCHANGED:
     {
-      wchar_t dir[MAX_PATH * 2];
-
-      if (shGetPathFromIDListW((LPITEMIDLIST)lp , dir))
-        SendMessageW(hwnd, BFFM_SETSTATUSTEXTW, 0, (LPARAM)dir);
-      else
-        SendMessageW(hwnd, BFFM_SETSTATUSTEXTW, 0, (LPARAM)L"");
+      UString path;
+      if (params && GetPathFromIDList((LPCITEMIDLIST)lp, path))
+        params->SelectedPath = path;
       break;
     }
-    */
     default:
       break;
   }
@@ -808,33 +1117,40 @@ int CALLBACK BrowseCallbackProc2(HWND hwnd, UINT uMsg, LPARAM /* lp */, LPARAM d
 
 
 static bool BrowseForFolder(HWND owner, LPCWSTR title, UINT ulFlags,
-    LPCWSTR initialFolder, UString &resultPath)
+    LPCWSTR initialFolder, UString &resultPath, LPCWSTR newFolderName)
 {
   UString displayName;
   BROWSEINFOW browseInfo;
+  CBrowseFolderParamsW params;
+  params.InitialPath = initialFolder;
+  params.NewFolderName = newFolderName;
   browseInfo.hwndOwner = owner;
   browseInfo.pidlRoot = NULL;
   browseInfo.pszDisplayName = displayName.GetBuf(MAX_PATH);
   browseInfo.lpszTitle = title;
   browseInfo.ulFlags = ulFlags;
-  browseInfo.lpfn = initialFolder ? BrowseCallbackProc2 : NULL;
-  browseInfo.lParam = (LPARAM)initialFolder;
+  browseInfo.lpfn = (initialFolder || (newFolderName && newFolderName[0])) ?
+      BrowseCallbackProc2 : NULL;
+  browseInfo.lParam = (LPARAM)&params;
   return BrowseForFolder(&browseInfo, resultPath);
 }
 
-bool BrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR initialFolder, UString &resultPath)
+bool BrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR initialFolder, UString &resultPath,
+    LPCWSTR newFolderName)
 {
   if (g_IsNT)
     return BrowseForFolder(owner, title,
       BIF_NEWDIALOGSTYLE | BIF_RETURNONLYFSDIRS
       //  | BIF_STATUSTEXT // This flag is not supported when BIF_NEWDIALOGSTYLE is specified.
-      , initialFolder, resultPath);
+      , initialFolder, resultPath, newFolderName);
   // BIF_STATUSTEXT; BIF_USENEWUI   (Version 5.0)
   CSysString s;
+  const CSysString sysNewFolder = newFolderName ? GetSystemString(newFolderName) : CSysString();
   bool res = BrowseForFolder(owner, GetSystemString(title),
       BIF_NEWDIALOGSTYLE | BIF_RETURNONLYFSDIRS
       // | BIF_STATUSTEXT  // This flag is not supported when BIF_NEWDIALOGSTYLE is specified.
-      , GetSystemString(initialFolder), s);
+      , GetSystemString(initialFolder), s,
+      newFolderName ? (LPCTSTR)sysNewFolder : (LPCTSTR)NULL);
   resultPath = GetUnicodeString(s);
   return res;
 }

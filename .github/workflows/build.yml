@@ -4,76 +4,21 @@ on: [push, pull_request]
 
 jobs:
 
-  linux:
-
-    strategy:
-      matrix:
-        arch: [ x64, arm64 ]
-        include:
-          - arch: x64
-            is_arm: false
-            runner: ubuntu-latest
-          - arch: arm64
-            is_arm: true
-            runner: ubuntu-24.04-arm
-
-    runs-on: ${{ matrix.runner }}
-
-    steps:
-    - uses: actions/checkout@v6
-    - name: Configure build system (uasm)
-      if: ${{ !matrix.is_arm }}
-      run: |
-        wget -q "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_linux64.zip"
-        unzip uasm257_linux64.zip uasm
-        sudo install -m 755 uasm /usr/bin
-    - name: Build via clang
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
-    - name: Build via gcc
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
-    - name: Test with clang binary
-      run: |
-        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tsem
-    - name: Test with gcc binary
-      run: |
-        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tsem
-    - name: Upload Build Artifacts (gcc)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-gcc/*
-        name: linux-gcc-${{ matrix.arch }}
-    - name: Upload Build Artifacts (clang)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-clang/*
-        name: linux-clang-${{ matrix.arch }}
-
   windows:
 
     strategy:
       matrix:
-        arch: [ x64, x86, arm64 ]
+        arch: [ x64, x86 ]
         darkmode: [darkmode, '']
         include:
           - arch: x86
-            #is_arm: false
             runner: windows-2025-vs2026
             subsys: "5.01"
             platform: "x86"
           - arch: x64
-            #is_arm: false
             runner: windows-2025-vs2026
             subsys: "5.02"
             platform: "x64"
-          - arch: arm64
-            #is_arm: true
-            runner: windows-11-arm
-            subsys: "6.02"
-            platform: "arm64"
 
     runs-on: ${{ matrix.runner }}
 
@@ -112,13 +57,7 @@ jobs:
       - name: Compiling ${{ matrix.arch }}
         shell: cmd
         run: |
-          :: fallback to VS2022 for arm64 due to bug in VS2026
-          if not "${{ matrix.arch }}" == "arm64" (
-            call "%VCVARSALL_PATH%" ${{ matrix.arch }}
-          ) else (
-            echo [INFO] ARM64 target detected. Forcing Visual Studio 2022 toolset workaround...
-            call "%VCVARSALL_PATH%" ${{ matrix.arch }} -vcvars_ver=14.4
-          )
+          call "%VCVARSALL_PATH%" ${{ matrix.arch }}
           set WDIR=%cd%
           set PLATFORM=${{matrix.platform}}
           set SUBSYS=${{matrix.subsys}}

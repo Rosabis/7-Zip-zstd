@@ -5,7 +5,10 @@
 
 #include "../../../Windows/CommonDialog.h"
 
-bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultPath);
+/* newFolderName: suggested name for the dialog's "New Folder" button.
+   NULL keeps the system default ("New Folder"). */
+bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultPath,
+    LPCWSTR newFolderName = NULL);
 
 struct CBrowseFilterInfo
 {
@@ -27,6 +30,6 @@ struct CBrowseInfo: public NWindows::CCommonDialogInfo
 
 bool CorrectFsPath(const UString &relBase, const UString &path, UString &result);
 
-bool Dlg_CreateFolder(HWND wnd, UString &destName);
+bool Dlg_CreateFolder(HWND wnd, UString &destName, const wchar_t *defaultName = NULL);
 
 #endif

@@ -74,6 +74,32 @@ HRESULT CHandler::SetHeaderMethod(CCompressionMethodMode &headerMethod)
 }
 
 
+/* A dictionary whose match finder does not fit in the memory limit is
+   halved until it does. One LZMA2 encoder with a ~4 GiB dictionary
+   (property byte 40, listed as LZMA2:32) allocates on the order of 32 GiB,
+   which is what an unset dictionary used to request. */
+static void Reduce_Lzma_Dict_for_MemLimit(COneMethodInfo &m, UInt64 limit)
+{
+  const UInt64 kMinDict = (UInt64)1 << 20;
+  if (limit < kMinDict)
+    return;
+  for (unsigned n = 0; n < 32; n++)
+  {
+    const UInt64 mem = m.Get_Lzma_MemUsage(true);
+    if (mem == 0 || mem <= limit)
+      return;
+    const UInt64 dict = m.Get_Lzma_DicSize();
+    if (dict <= kMinDict)
+      return;
+    UInt64 next = dict >> 1;
+    if (next < kMinDict)
+      next = kMinDict;
+    if (next >= dict || next > (UInt32)0xFFFFFFFF)
+      return;
+    m.AddProp32(NCoderPropID::kDictionarySize, (UInt32)next);
+  }
+}
+
 HRESULT CHandler::SetMainMethod(CCompressionMethodMode &methodMode)
 {
   methodMode.Bonds = _bonds;
@@ -132,6 +158,14 @@ HRESULT CHandler::SetMainMethod(CCompressionMethodMode &methodMode)
     if (methodMode.NumThreadGroups > 1)
       CMultiMethodProps::Set_Method_NumThreadGroups_IfNotFinded(oneMethodInfo, methodMode.NumThreadGroups);
 #endif
+
+    if (methodMode.MemoryUsageLimit_WasSet)
+    {
+      const AString &methodName = oneMethodInfo.MethodName;
+      if (methodName.IsEqualTo_Ascii_NoCase(k_LZMA_Name) ||
+          methodName.IsEqualTo_Ascii_NoCase("LZMA2"))
+        Reduce_Lzma_Dict_for_MemLimit(oneMethodInfo, methodMode.MemoryUsageLimit);
+    }
 
     CMethodFull &methodFull = methodMode.Methods.AddNew();
     RINOK(PropsMethod_To_FullMethod(methodFull, oneMethodInfo))

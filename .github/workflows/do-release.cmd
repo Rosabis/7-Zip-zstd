@@ -66,7 +66,7 @@ cd %WD% && rd /S /Q Codecs-%ARCH%
 goto :eof
 REM end of doit function.
 
-REM Currently we build 3 architectures as 6 targets with and without darkmode (ndm suffix)
+REM Windows x86 and x64, each with and without darkmode (ndm suffix)
 :start
 
 call :doit x86       ""                            "%WD%\bin-x86"       "tc7z.dll"
@@ -74,9 +74,6 @@ call :doit x86-ndm   ""                            "%WD%\bin-x86-ndm"   "tc7z.dl
 
 call :doit x64       "%WD%\bin-x86\7-zip.dll"      "%WD%\bin-x64"       "tc7z64.dll"
 call :doit x64-ndm   "%WD%\bin-x86-ndm\7-zip.dll"  "%WD%\bin-x64-ndm"   "tc7z64.dll"
-
-call :doit arm64     ""                            "%WD%\bin-arm64"     "tc7zArm64.dll"
-call :doit arm64-ndm ""                            "%WD%\bin-arm64-ndm" "tc7zArm64.dll"
 
 REM Total Commander DLL
 cd %WD%\totalcmd

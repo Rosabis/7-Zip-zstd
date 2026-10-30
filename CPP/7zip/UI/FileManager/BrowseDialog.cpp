@@ -140,6 +140,7 @@ public:
 
   UString FilePath;   // [in / out]
   UString Title;
+  UString NewFolderName; // suggested name for the "New Folder" button
 
   CBrowseDialog():
    #ifndef Z7_SFX
@@ -788,7 +789,8 @@ void CBrowseDialog::OnCreateDir()
   UString name;
   {
     UString enteredName;
-    Dlg_CreateFolder((HWND)*this, enteredName);
+    Dlg_CreateFolder((HWND)*this, enteredName,
+        NewFolderName.IsEmpty() ? NULL : (LPCWSTR)NewFolderName);
     if (enteredName.IsEmpty())
       return;
     if (!CorrectFsPath(DirPrefix, enteredName, name))
@@ -870,7 +872,8 @@ void CBrowseDialog::FinishOnOK()
 
 
 
-bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultPath)
+bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultPath,
+    LPCWSTR newFolderName)
 {
   resultPath.Empty();
 
@@ -880,7 +883,7 @@ bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultP
   if (!IsSuperOrDevicePath(path))
   if (MyStringLen(path) < MAX_PATH)
 #endif
-    return NShell::BrowseForFolder(owner, title, path, resultPath);
+    return NShell::BrowseForFolder(owner, title, path, resultPath, newFolderName);
 
   #endif //  UNDER_CE
 
@@ -892,6 +895,8 @@ bool MyBrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR path, UString &resultP
     dialog.Title = title;
   if (path)
     dialog.FilePath = path;
+  if (newFolderName)
+    dialog.NewFolderName = newFolderName;
   if (dialog.Create(owner) != IDOK)
     return false;
   resultPath = dialog.FilePath;
@@ -1118,13 +1123,16 @@ bool CorrectFsPath(const UString & /* relBase */, const UString &path, UString &
 
 #endif
 
-bool Dlg_CreateFolder(HWND wnd, UString &destName)
+bool Dlg_CreateFolder(HWND wnd, UString &destName, const wchar_t *defaultName)
 {
   destName.Empty();
   CComboDialog dlg;
   LangString(IDS_CREATE_FOLDER, dlg.Title);
   LangString(IDS_CREATE_FOLDER_NAME, dlg.Static);
-  LangString(IDS_CREATE_FOLDER_DEFAULT_NAME, dlg.Value);
+  if (defaultName && defaultName[0])
+    dlg.Value = defaultName;
+  else
+    LangString(IDS_CREATE_FOLDER_DEFAULT_NAME, dlg.Value);
   if (dlg.Create(wnd) != IDOK)
     return false;
   destName = dlg.Value;

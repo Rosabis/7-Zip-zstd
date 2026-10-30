@@ -275,13 +275,27 @@ bool CExtractDialog::OnButtonClicked(unsigned buttonID, HWND buttonHWND)
   return CModalDialog::OnButtonClicked(buttonID, buttonHWND);
 }
 
+static UString GetArchiveBaseName(const UString &arcPath)
+{
+  UString name = arcPath;
+  const int slash = name.ReverseFind_PathSepar();
+  if (slash >= 0)
+    name.DeleteFrontal((unsigned)slash + 1);
+  const int dot = name.ReverseFind_Dot();
+  if (dot > 0)
+    name.DeleteFrom((unsigned)dot);
+  return name;
+}
+
 void CExtractDialog::OnButtonSetPath()
 {
   UString currentPath;
   _path.GetText(currentPath);
   UString title = LangString(IDS_EXTRACT_SET_FOLDER);
   UString resultPath;
-  if (!MyBrowseForFolder(*this, title, currentPath, resultPath))
+  const UString folderName = GetArchiveBaseName(ArcPath);
+  if (!MyBrowseForFolder(*this, title, currentPath, resultPath,
+      folderName.IsEmpty() ? NULL : folderName.Ptr()))
     return;
   #ifndef Z7_NO_REGISTRY
   _path.SetCurSel(-1);

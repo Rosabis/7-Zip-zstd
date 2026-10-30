@@ -117,12 +117,17 @@ HRESULT DataObject_GetData_FILE_ATTRS(IDataObject *dataObject, CFileAttribs &att
 
 bool GetPathFromIDList(LPCITEMIDLIST itemIDList, CSysString &path);
 bool BrowseForFolder(LPBROWSEINFO lpbi, CSysString &resultPath);
-bool BrowseForFolder(HWND owner, LPCTSTR title, LPCTSTR initialFolder, CSysString &resultPath);
+/* newFolderName: if not NULL, the shell dialog's "Make New Folder" button
+   creates that name (and "name (2)", "name (3)", ...) instead of the
+   localized "New Folder". NULL keeps the system button. */
+bool BrowseForFolder(HWND owner, LPCTSTR title, LPCTSTR initialFolder, CSysString &resultPath,
+    LPCTSTR newFolderName = NULL);
 
 #ifndef _UNICODE
 bool GetPathFromIDList(LPCITEMIDLIST itemIDList, UString &path);
 bool BrowseForFolder(LPBROWSEINFO lpbi, UString &resultPath);
-bool BrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR initialFolder, UString &resultPath);
+bool BrowseForFolder(HWND owner, LPCWSTR title, LPCWSTR initialFolder, UString &resultPath,
+    LPCWSTR newFolderName = NULL);
 #endif
 }}
 

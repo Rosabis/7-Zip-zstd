@@ -358,7 +358,7 @@ BOOL CPanel::OnEndLabelEdit(LV_DISPINFOW * lpnmh)
   return TRUE;
 }
 
-bool Dlg_CreateFolder(HWND wnd, UString &destName);
+bool Dlg_CreateFolder(HWND wnd, UString &destName, const wchar_t *defaultName = NULL);
 
 void CPanel::CreateFolder()
 {
